@@ -1,12 +1,17 @@
 import os
 import json
-from collections import defaultdict
+from collections import defaultdict, Counter
 from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTTextContainer, LTChar, LTTextLine
 
-def extract_font_styles(pdf_path):
-    style_counts = defaultdict(int)
+# Known heading keywords to boost signal
+KEYWORDS = [
+    "mission statement", "goals", "pathway options",
+    "regular pathway", "distinction pathway", "elective course offerings", "what colleges say"
+]
 
+def extract_font_styles(pdf_path):
+    style_counts = Counter()
     for page_layout in extract_pages(pdf_path):
         for element in page_layout:
             if isinstance(element, LTTextContainer):
@@ -16,98 +21,71 @@ def extract_font_styles(pdf_path):
                             if isinstance(char, LTChar):
                                 fontname = char.fontname
                                 size = round(char.size, 1)
-                                style = (fontname, size)
-                                style_counts[style] += 1
+                                style_counts[(fontname, size)] += 1
     return style_counts
 
+def is_bold(fontname):
+    return "Bold" in fontname or "bold" in fontname
+
 def extract_headings_and_title(pdf_path):
-    from pdfminer.high_level import extract_pages
-    from pdfminer.layout import LTTextContainer, LTChar, LTTextLine
-    from collections import defaultdict
+    style_counts = extract_font_styles(pdf_path)
+    sorted_styles = sorted(style_counts.items(), key=lambda x: (-x[1], -x[0][1] if isinstance(x[0][1], (int, float)) else 0))
+    if not sorted_styles:
+        return "", []
+
+    dominant_fonts = [item[0] for item in sorted_styles[:5]]  # Top 5 fonts
 
     headings = []
-    style_counts = defaultdict(int)
-    line_data = []
+    title = ""
+    seen_titles = set()
 
-    for page_layout in extract_pages(pdf_path):
-        page_number = page_layout.pageid
+    for page_num, page_layout in enumerate(extract_pages(pdf_path), start=1):
+        lines = []
         for element in page_layout:
             if isinstance(element, LTTextContainer):
-                for text_line in element:
-                    if not isinstance(text_line, LTTextLine):
-                        continue
+                for line in element:
+                    if isinstance(line, LTTextLine):
+                        line_text = line.get_text().strip()
+                        if not line_text or line_text.lower() in seen_titles:
+                            continue
 
-                    text = text_line.get_text().strip()
-                    if not text:
-                        continue
+                        fontnames = set()
+                        sizes = []
 
-                    sizes = []
-                    fonts = []
+                        for char in line:
+                            if isinstance(char, LTChar):
+                                fontnames.add(char.fontname)
+                                sizes.append(char.size)
 
-                    for char in text_line:
-                        if isinstance(char, LTChar):
-                            sizes.append(round(char.size, 1))
-                            fonts.append(char.fontname)
+                        if not sizes:
+                            continue
+                        avg_size = sum(sizes) / len(sizes)
+                        is_bold_line = any(is_bold(fn) for fn in fontnames)
 
-                    if not sizes:
-                        continue
+                        style_key = next(((fn, round(avg_size, 1)) for fn in fontnames if (fn, round(avg_size, 1)) in dominant_fonts), None)
 
-                    avg_size = round(sum(sizes) / len(sizes), 1)
-                    fontname = fonts[0] if fonts else ""
-                    is_bold = "Bold" in fontname or "bold" in fontname
+                        if style_key and (is_bold_line or style_key in dominant_fonts or any(kw in line_text.lower() for kw in KEYWORDS)):
+                            level = "H1" if avg_size >= 13 else "H2" if avg_size >= 11 else "H3"
+                            headings.append({"text": line_text, "page": page_num, "level": level})
+                            seen_titles.add(line_text.lower())
 
-                    style_counts[(avg_size, is_bold)] += 1
+    if headings:
+        title = headings[0]["text"]
+    return title, headings
 
-                    line_data.append({
-                        "text": text,
-                        "size": avg_size,
-                        "bold": is_bold,
-                        "page": page_number
-                    })
-
-    # Rank styles: largest size + boldness + frequency
-    sorted_styles = sorted(
-        style_counts.items(),
-        key=lambda x: (-x[0][0], -int(x[0][1]), -x[1])
-    )
-
-    # Pick top 3 heading styles
-    heading_styles = [style for (style, _) in sorted_styles[:3]]
-
-    outline = []
-    for line in line_data:
-        if (line["size"], line["bold"]) in heading_styles:
-            if len(line["text"]) < 120:  # heuristics: headings are usually short
-                outline.append({
-                    "level": "H1",  # We'll improve level detection later
-                    "text": line["text"],
-                    "page": line["page"]
-                })
-
-    title = outline[0]["text"] if outline else ""
-    return title, outline
-
-
-def process_pdf(pdf_path, output_path):
-    print(f"🔍 Processing {os.path.basename(pdf_path)}...")
-    title, outline = extract_headings_and_title(pdf_path)
-    data = {
-        "title": title,
-        "outline": outline
-    }
-    with open(output_path, "w", encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    print(f"✅ Processed {os.path.basename(pdf_path)} -> {os.path.basename(output_path)}")
+def process_pdf(input_pdf, output_json):
+    title, outline = extract_headings_and_title(input_pdf)
+    output_data = {"title": title, "outline": outline}
+    with open(output_json, "w", encoding="utf-8") as f:
+        json.dump(output_data, f, indent=2, ensure_ascii=False)
 
 def process_all_pdfs(input_dir, output_dir):
-    print("🚀 Starting PDF outline extraction...")
     os.makedirs(output_dir, exist_ok=True)
+    print("🚀 Starting PDF outline extraction...")
     for filename in os.listdir(input_dir):
         if filename.endswith(".pdf"):
-            input_pdf = os.path.join(input_dir, filename)
-            output_json = os.path.join(output_dir, filename.replace(".pdf", ".json"))
-            process_pdf(input_pdf, output_json)
+            pdf_path = os.path.join(input_dir, filename)
+            json_path = os.path.join(output_dir, filename.replace(".pdf", ".json"))
+            print(f"🔍 Processing {filename}...")
+            process_pdf(pdf_path, json_path)
     print("✅ Completed.")
-
-if __name__ == "__main__":
-    process_all_pdfs("/app/input", "/app/output")
