@@ -81,11 +81,12 @@ def process_pdf(input_pdf, output_json):
 
 def process_all_pdfs(input_dir, output_dir):
     os.makedirs(output_dir, exist_ok=True)
-    print("🚀 Starting PDF outline extraction...")
+    print("Starting PDF outline extraction...")
     for filename in os.listdir(input_dir):
         if filename.endswith(".pdf"):
             pdf_path = os.path.join(input_dir, filename)
             json_path = os.path.join(output_dir, filename.replace(".pdf", ".json"))
             print(f"🔍 Processing {filename}...")
             process_pdf(pdf_path, json_path)
-    print("✅ Completed.")
+    print("Completed.")
+
