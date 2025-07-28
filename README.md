@@ -25,7 +25,7 @@ docker build -t adobe-hackathon:supermin .
 docker run --rm -v "$PWD/input:/app/input" -v "$PWD/output:/app/output" adobe-hackathon:supermin
 
 ## Round 1B — Persona-Driven Document Intelligence
-Goal: Extract and prioritize the most relevant sections from a collection of PDFs, tailored to a specific persona and job-to-be-done.
+> **Goal:** Extract and prioritize the most relevant sections from a collection of PDFs, tailored to a specific persona and job-to-be-done.
 
 ## **Features**:
 Supports diverse domains (travel, cooking, software tutorials)
