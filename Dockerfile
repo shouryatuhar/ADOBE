@@ -1,10 +1,18 @@
-FROM --platform=linux/amd64 python:3.10
+FROM python:3.11-alpine as builder
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN apk add --no-cache libffi-dev gcc musl-dev \
+ && pip install --no-cache-dir --target=/app/pdfminer pdfminer.six==20221105 \
+ && rm -rf /root/.cache /var/cache/apk/*
 
-COPY process_pdfs.py .
+# ---- Final tiny runtime ----
+FROM python:3.11-alpine
+
+WORKDIR /app
+
+COPY --from=builder /app/pdfminer /usr/local/lib/python3.11/site-packages
+COPY . .
 
 CMD ["python", "process_pdfs.py"]
+

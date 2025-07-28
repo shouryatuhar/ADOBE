@@ -1,29 +1,25 @@
 import os
 import json
-from pdfminer.high_level import extract_pages
-from pdfminer.layout import LTTextContainer, LTChar
-from collections import defaultdict, Counter
-
 import re
 import unicodedata
+from collections import Counter
+from pdfminer.high_level import extract_pages
+from pdfminer.layout import LTTextContainer, LTChar
 
-def clean_heading(text):
-    # Replace non-breaking spaces and control characters
-    text = text.replace('\u00a0', ' ').replace('\xa0', ' ')
-    text = unicodedata.normalize('NFKD', text)
-
-    # Remove non-ASCII characters except basic punctuation
-    text = re.sub(r'[^\x00-\x7F]+', '', text)
-
-    # Strip leading/trailing spaces and normalize whitespace
-    return re.sub(r'\s+', ' ', text).strip()
-
-# Define heading keywords to boost
 HEADING_KEYWORDS = {
     "mission statement", "goals", "pathway options",
     "regular pathway", "distinction pathway",
     "elective course offerings", "what colleges say!"
 }
+
+def clean_heading(text):
+    text = text.replace('\u00a0', ' ')
+    text = unicodedata.normalize('NFKC', text)
+    text = re.sub(r'[^\x20-\x7E\u00A0-\u024F]+', '', text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+def normalize_for_match(s):
+    return re.sub(r'\s+', ' ', unicodedata.normalize('NFKD', s.lower()).replace('\u00a0', ' ').strip())
 
 def extract_font_styles(pdf_path):
     font_stats = Counter()
@@ -32,26 +28,25 @@ def extract_font_styles(pdf_path):
             if isinstance(element, LTTextContainer):
                 for text_line in element:
                     line_fonts = set()
-                    for char in text_line:
-                        if isinstance(char, LTChar):
-                            font_key = (char.fontname, round(char.size, 1))
-                            line_fonts.add(font_key)
+                    try:
+                        for char in text_line:
+                            if isinstance(char, LTChar):
+                                line_fonts.add((char.fontname, round(char.size, 1)))
+                    except TypeError:
+                        continue
                     for font in line_fonts:
                         font_stats[font] += 1
     return font_stats
 
 def extract_headings_and_title(pdf_path):
-    style_counts = extract_font_styles(pdf_path)
+    font_stats = extract_font_styles(pdf_path)
 
-    def is_numeric(value):
-        try:
-            float(value)
-            return True
-        except:
-            return False
+    def is_numeric(val):
+        try: float(val); return True
+        except: return False
 
     sorted_styles = sorted(
-        [(style, count) for style, count in style_counts.items() if is_numeric(style[1])],
+        [(style, count) for style, count in font_stats.items() if is_numeric(style[1])],
         key=lambda x: (-x[1], -float(x[0][1]))
     )
     font_size_order = [float(style[0][1]) for style in sorted_styles]
@@ -71,14 +66,18 @@ def extract_headings_and_title(pdf_path):
         for element in page_layout:
             if isinstance(element, LTTextContainer):
                 for line in element:
-                    line_text = line.get_text().strip()
-                    if not line_text or len(line_text) > 300:
+                    raw_text = line.get_text().strip()
+                    if not raw_text or len(raw_text) > 300:
+                        continue
+                    if re.fullmatch(r'[\s\d\.\-•·‣•‧●○□…‥]+', raw_text):
+                        continue
+                    if 'table of contents' in raw_text.lower():
                         continue
 
-                    line_fonts = []
-                    for char in line:
-                        if isinstance(char, LTChar):
-                            line_fonts.append((char.fontname, round(char.size, 1)))
+                    try:
+                        line_fonts = [(char.fontname, round(char.size, 1)) for char in line if isinstance(char, LTChar)]
+                    except TypeError:
+                        continue
 
                     if not line_fonts:
                         continue
@@ -88,26 +87,13 @@ def extract_headings_and_title(pdf_path):
                     font_names = [fn for fn, _ in line_fonts]
                     is_bold = any("Bold" in fn or "bold" in fn for fn in font_names)
 
-                    line_text_clean = ' '.join(line_text.split())
-                    line_text_lower = line_text_clean.lower()
-
-                    matched_keywords = [kw for kw in HEADING_KEYWORDS if kw in line_text_lower]
-
-                    if matched_keywords and len(matched_keywords) > 1:
-                        for kw in matched_keywords:
-                            headings.append({
-                                "level": "H3",
-                                "text": kw.title(),
-                                "page": page_number
-                            })
+                    cleaned = clean_heading(raw_text)
+                    norm_line = normalize_for_match(cleaned)
+                    if not cleaned or len(re.findall(r'[A-Za-z]', cleaned)) < 3:
                         continue
 
-                    if matched_keywords:
-                        score = 3
-                    elif is_bold:
-                        score = 2
-                    else:
-                        score = 1
+                    matched_keywords = [kw for kw in HEADING_KEYWORDS if kw in norm_line]
+                    score = 3 if matched_keywords else (2 if is_bold else 1)
 
                     if most_common_size >= size_thresholds["H1"]:
                         level = "H1"
@@ -118,35 +104,22 @@ def extract_headings_and_title(pdf_path):
                     else:
                         continue
 
-if score >= 2:
-    cleaned_text = clean_heading(line_text_clean)
+                    if score >= 2:
+                        headings.append({
+                            "level": level,
+                            "text": cleaned,
+                            "page": page_number
+                        })
 
-    # Filter out lines that are just dots, dashes, or digits
-    if not cleaned_text or re.fullmatch(r'[\d\s\.\-]+', cleaned_text):
-        continue
-
-    headings.append({
-        "level": level,
-        "text": cleaned_text,
-        "page": page_number
-    })
-
-                        
-
-if not title_candidate and page_number == 1 and score >= 2 and level == "H1":
-                        title_candidate = line_text_clean
+                        if not title_candidate and page_number == 1 and level == "H1":
+                            title_candidate = cleaned
 
     return title_candidate or (headings[0]["text"] if headings else ""), headings
 
-
 def process_pdf(pdf_path, output_path):
     title, outline = extract_headings_and_title(pdf_path)
-    result = {
-        "title": title,
-        "outline": outline
-    }
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
+        json.dump({"title": title, "outline": outline}, f, indent=2, ensure_ascii=False)
 
 def process_all_pdfs(input_dir, output_dir):
     print("Starting PDF outline extraction...")
