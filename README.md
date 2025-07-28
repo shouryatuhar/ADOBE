@@ -39,15 +39,12 @@ CPU-only, under 1GB RAM, offline processing under 60 seconds
 Output in the exact required JSON format
 
 **Run Instructions**:
-bash
-Copy
-Edit
-cd 1B
+
 docker build -t persona-doc-analyzer .
-docker run --rm -v "$PWD:/app" persona-doc-analyzer python process_collection.py "Collection 1"
-# or:
+# docker run --rm -v "$PWD:/app" persona-doc-analyzer python process_collection.py "Collection 1"
+
 # docker run --rm -v "$PWD:/app" persona-doc-analyzer python process_collection.py "Collection 2"
 # docker run --rm -v "$PWD:/app" persona-doc-analyzer python process_collection.py "Collection 3"
-📁 Output:
+**Output**:
 Saved to Collection X/challenge1b_output.json
 
